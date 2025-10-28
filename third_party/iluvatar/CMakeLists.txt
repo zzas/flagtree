@@ -15,7 +15,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     )
   else()
     if(EDITABLE_MODE)
-    message("here")
       find_library(iluvatarTritonPluginLib
       NAMES
         iluvatarTritonPlugin.so

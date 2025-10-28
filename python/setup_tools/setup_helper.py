@@ -35,7 +35,6 @@ def install_extension(*args, **kargs):
 
 def get_backend_cmake_args(*args, **kargs):
     if "editable_wheel" in sys.argv:
-        print("editabla_mode ON")
         editable = True
     else:
         editable = False
