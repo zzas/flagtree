@@ -318,14 +318,21 @@ def handle_flagtree_backend():
 
 
 def handle_plugin_backend(editable):
-    if flagtree_backend in ["iluvatar", "mthreads"] and editable is False:
-        src_plugin_path = str(
-            os.getenv("HOME")) + "/.flagtree/" + flagtree_backend + "/" + flagtree_backend + "TritonPlugin.so"
-        dst_plugin_dir = sysconfig.get_paths()['purelib'] + "/triton/_C"
-        if not os.path.exists(dst_plugin_dir):
-            os.makedirs(dst_plugin_dir)
-        dst_plugin_path = dst_plugin_dir + "/" + flagtree_backend + "TritonPlugin.so"
-        shutil.copy(src_plugin_path, dst_plugin_path)
+    if flagtree_backend in ["iluvatar", "mthreads"]:
+        if editable is False:
+            src_build_plugin_path = str(
+                os.getenv("HOME")) + "/.flagtree/" + flagtree_backend + "/" + flagtree_backend + "TritonPlugin.so"
+            dst_build_plugin_dir = sysconfig.get_paths()['purelib'] + "/triton/_C"
+            if not os.path.exists(dst_build_plugin_dir):
+                os.makedirs(dst_build_plugin_dir)
+            dst_build_plugin_path = dst_build_plugin_dir + "/" + flagtree_backend + "TritonPlugin.so"
+            shutil.copy(src_build_plugin_path, dst_build_plugin_path)
+        src_install_plugin_path = str(
+                os.getenv("HOME")) + "/.flagtree/" + flagtree_backend + "/" + flagtree_backend + "TritonPlugin.so"
+        dst_install_plugin_dir = os.path.dirname(os.path.abspath(__file__))+"/../triton/_C"
+        if not os.path.exists(dst_install_plugin_dir):
+            os.makedirs(dst_install_plugin_dir)
+        shutil.copy(src_install_plugin_path, dst_install_plugin_dir)
 
 
 def set_env(env_dict: dict):
