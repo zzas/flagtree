@@ -1,3 +1,7 @@
+#include "flagtree_spec.h"
+
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_OptimizeThreadLocality_cpp
+
 #include <memory>
 #include <numeric>
 
@@ -172,7 +176,7 @@ class TritonGPUOptimizeThreadLocalityPass
       auto viewOpTensorType = RankedTensorType::get(
           viewOpTensorShape, srcType.getElementType(), blocked3d);
       auto slice2d = triton::gpu::SliceEncodingAttr::get(mod.getContext(), rank,
-                                                         blocked3d, false);
+                                                         blocked3d);
       // Get forOp
       assert(reduce->hasOneUse());
       OpOperand &use = *(reduce->getUses().begin());
@@ -410,10 +414,9 @@ private:
         insertValue(blocked.getCTALayout().getCTAOrder(), rank, rank);
     auto ctaLayout3d = triton::gpu::CTALayoutAttr::get(
         reduce.getContext(), ctasPerCGA3d, ctasSplitNum3d, ctaOrder3d);
-    SmallVector<unsigned, 4> smeCTA(rank);
     auto blocked3d = triton::gpu::BlockedEncodingAttr::get(
         reduce.getContext(), sizePerThread3d, threadsPerWarp3d, warsPerCTA3d,
-        order3d, ctaLayout3d, false, smeCTA);
+        order3d, ctaLayout3d);
     return blocked3d;
   }
 
@@ -435,3 +438,5 @@ private:
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
+
+#endif

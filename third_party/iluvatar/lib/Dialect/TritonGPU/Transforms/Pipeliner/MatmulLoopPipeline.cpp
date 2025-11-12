@@ -1,3 +1,7 @@
+#include "flagtree_spec.h"
+
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_Pipeliner_MatmulLoopPipeline_cpp
+
 #include "PipelineExpander.h"
 #include "PipeliningUtility.h"
 #include "Schedule.h"
@@ -15,6 +19,9 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#ifdef __NVIDIA__
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#endif
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -31,7 +38,9 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-// namespace ttng = mlir::triton::nvidia_gpu;
+#ifdef __NVIDIA__
+namespace ttng = mlir::triton::nvidia_gpu;
+#endif
 
 // TODO: We can extra some helpers into common utilities once we add more
 // schedules.
@@ -251,8 +260,7 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
   Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
       loc, src, view, mask, other, loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile(), loadOp.getInputStride(), loadOp.getInputStride(),
-      loadOp.getInputStride());
+      loadOp.getIsVolatile());
   Operation *commmit =
       builder.create<ttg::AsyncCommitGroupOp>(loc, copy->getResult(0));
   Operation *wait =
@@ -309,7 +317,6 @@ static void createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   loadOp.erase();
 }
 
-#ifndef __ILUVATAR__
 static void createTMAAsyncCopy(
     scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp, Value alloc,
     Value insertIdx, Value extractIdx, Value barrier, Operation *waitOp,
@@ -367,7 +374,6 @@ static void createTMAAsyncCopy(
   }
   loadOp.erase();
 }
-#endif
 
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return true and get the shared encoding that
@@ -922,7 +928,6 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
   return alloc;
 }
 
-#ifndef __ILUVATAR__
 // Create an allocation to hold the mbarriers.
 static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
   OpBuilder builder(forOp);
@@ -948,7 +953,6 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
   }
   return barrierAlloc;
 }
-#endif
 
 struct AsyncLoad {
   AsyncLoad(Operation *loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
@@ -959,7 +963,6 @@ struct AsyncLoad {
   bool isTMALoad = false;
 };
 
-#ifndef __ILUVATAR__
 // Create barriers and wait ops for the async loads. Barriers may be shared by
 // multiple loads is the schedule allows it.
 static void createTMABarrierAndWait(
@@ -1060,7 +1063,6 @@ static void createTMABarrierAndWait(
     }
   }
 }
-#endif
 
 // Convert load ops into their asyn version and apply multi-buffering based on
 // the required number of buffers.
@@ -1073,15 +1075,10 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
   // allocate only the number of buffers that specific loads need.
   // Instead, we allocate the maximum number of buffers needed by any load.
   int numBuffers =
-      // llvm::max_element(llvm::make_second_range(loadToInfo), [](auto &lhs,
-      std::max_element(
-          llvm::make_second_range(loadToInfo).begin(),
-          llvm::make_second_range(loadToInfo).end(),
-          [](auto &lhs, auto &rhs) { return lhs.distToUse < rhs.distToUse; })
-          ->distToUse;
-#ifdef __ILUVATAR__
-  numBuffers++;
-#else
+      llvm::max_element(llvm::make_second_range(loadToInfo), [](auto &lhs,
+                                                                auto &rhs) {
+        return lhs.distToUse < rhs.distToUse;
+      })->distToUse;
   bool hasMMAV3 =
       llvm::any_of(loadToInfo, [](auto &kv) { return kv.second.loadIsMMAV3; });
   if (hasMMAV3) {
@@ -1089,7 +1086,6 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
     // pipelining post-processing.
     numBuffers++;
   };
-#endif
 
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> allocs;
@@ -1154,10 +1150,9 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
     Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, one);
     phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
   }
-#ifndef __ILUVATAR__
   createTMABarrierAndWait(forOp, asyncLoads, insertIdx, extractIdx, phase,
                           numBuffers, schedule, barriers, loadToInfo);
-#endif
+
   // Create a cluster for the prefetches. It may end up being empty, but this
   // is OK.
   CoarseSchedule::Cluster prefetchCluster = schedule.clusters.newAtBack();
@@ -1166,13 +1161,11 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
     if (auto loadOp = dyn_cast<tt::LoadOp>(asyncLoad.loadOp)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                       schedule, prefetchCluster, loadToInfo, numStages);
-#ifndef __ILUVATAR__
     } else {
       auto descLoad = cast<tt::ExperimentalDescriptorLoadOp>(asyncLoad.loadOp);
       createTMAAsyncCopy(forOp, descLoad, asyncLoad.alloc, insertIdx,
                          extractIdx, asyncLoad.barrier, asyncLoad.waitOp, phase,
                          schedule, loadToInfo, numStages);
-#endif
     }
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
@@ -1184,11 +1177,10 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
   return allocs;
 }
 
-#ifndef __ILUVATAR__
 static void invalidateBarriers(OpBuilder &builder,
                                SmallVector<Value> &barriers) {
   for (Value barrier : barriers) {
-    int numBarriers = barrier.getType().cast<tt::MemDescType>().getShape()[0];
+    int numBarriers = cast<tt::MemDescType>(barrier.getType()).getShape()[0];
     for (int i = 0; i < numBarriers; i++) {
       Value idx = builder.create<arith::ConstantIntOp>(barrier.getLoc(), i, 32);
       tt::MemDescType barrierTy = tt::MemDescType::get(
@@ -1201,7 +1193,6 @@ static void invalidateBarriers(OpBuilder &builder,
     }
   }
 }
-#endif
 
 bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
@@ -1275,10 +1266,8 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
   builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), ValueRange({}), 0);
-#ifndef __ILUVATAR__
   // Invalidate any mbarrier create
   invalidateBarriers(builder, barriers);
-#endif
   // Explicitly deallocate allocated tensors after the wait op
   for (auto alloc : allocs)
     builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
@@ -1395,7 +1384,6 @@ void mlir::triton::updateWaits(ModuleOp module) {
   combineRedundantWaitOps(waitOps);
 }
 
-#ifndef __ILUVATAR__
 // Add the given values as operands of the given wait, and replace all uses of
 // the values with the wait.  Also adds related MemDesc's to the wait.
 //
@@ -1784,4 +1772,5 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
       builder.create<ttng::DotWaitOp>(forOp.getLoc(), ArrayRef<Value>{}, 0);
   threadValuesThroughWait(dotWaitAfterLoop, waitOperands);
 }
+
 #endif

@@ -1,3 +1,7 @@
+#include "flagtree_spec.h"
+
+#ifndef FLAGTREE_SPEC_Target_LLVMIR_LLVMDIScope_cpp
+
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
@@ -88,7 +92,7 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
       distinctId = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
       if (!compileUnitAttr) {
         compileUnitAttr = LLVM::DICompileUnitAttr::get(
-            context, distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
+            distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
             StringAttr::get(context, "triton"),
             /*isOptimized=*/true, LLVM::DIEmissionKind::LineTablesOnly);
       }
@@ -159,3 +163,5 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
 std::unique_ptr<Pass> mlir::createLLVMDIScopePass() {
   return std::make_unique<LLVMDIScopePass>();
 }
+
+#endif

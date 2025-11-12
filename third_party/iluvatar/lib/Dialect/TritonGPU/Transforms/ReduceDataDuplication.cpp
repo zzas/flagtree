@@ -1,3 +1,7 @@
+#include "flagtree_spec.h"
+
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_ReduceDataDuplication_cpp
+
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -42,15 +46,6 @@ public:
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (!dstDotOp)
         return;
-      if (auto srcMmaEncoding =
-              dyn_cast<triton::gpu::IluvatarMmaEncodingAttr>(srcEncoding)) {
-
-        if (srcMmaEncoding.getVersionMajor() == 1 ||
-            srcMmaEncoding.getVersionMajor() == 2 ||
-            (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
-             dstDotOp.getParent() == srcMmaEncoding))
-          return;
-      }
       if (auto srcMmaEncoding =
               dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(srcEncoding)) {
 
@@ -98,3 +93,5 @@ public:
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
+
+#endif

@@ -1,3 +1,7 @@
+#include "flagtree_spec.h"
+
+#ifndef FLAGTREE_SPEC_Dialect_Triton_Transforms_RewriteTensorPointer_cpp
+
 #include <memory>
 #include <stack>
 
@@ -24,7 +28,6 @@ private:
   SmallVector<Value> strides;
   SmallVector<Value> offsets;
   ArrayRef<int64_t> tensorShape;
-  ArrayRef<int32_t> order;
 
   // A cache to avoid generating the same offset with range
   DenseMap<unsigned, Value> cachedOffsetWithRange;
@@ -37,12 +40,11 @@ public:
   RewritedInfo(Value base, const SmallVector<Value> &shape,
                const SmallVector<Value> &strides,
                const SmallVector<Value> &offsets,
-               const ArrayRef<int64_t> &tensorShape,
-               const ArrayRef<int32_t> &order)
+               const ArrayRef<int64_t> &tensorShape)
       : base(base), shape(shape), strides(strides), offsets(offsets),
-        tensorShape(tensorShape), order(order) {
+        tensorShape(tensorShape) {
     assert(shape.size() == strides.size() && shape.size() == offsets.size() &&
-           shape.size() == tensorShape.size() && shape.size() == order.size());
+           shape.size() == tensorShape.size());
   }
 
   unsigned int length() const { return shape.size(); }
@@ -50,14 +52,6 @@ public:
   Value getOffset(unsigned i) { return offsets[i]; }
 
   SmallVector<Value> getOffsets() { return offsets; }
-
-#if defined(__ILUVATAR__)
-  Value getContiguousStride() {
-    if (strides.size() == 2)
-      return strides[order[1]];
-    return NULL;
-  }
-#endif
 
   void setOffset(unsigned i, Value newOffset) {
     offsets[i] = newOffset;
@@ -251,7 +245,7 @@ public:
     // Save information
     rewritedInfo[op.getResult()] =
         RewritedInfo(op.getBase(), op.getShape(), op.getStrides(), i64Offsets,
-                     tensorType.getShape(), op.getOrderAttr());
+                     tensorType.getShape());
 
     // Erase the original operation
     eraser.push(op);
@@ -319,29 +313,10 @@ public:
 
     // Create a new operation
     if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
-#if defined(__ILUVATAR__)
-      Value newResult;
-      Value resStride = info.getContiguousStride();
-      if (!newMask && !newOther && resStride) {
-        Value matStride = builder.create<arith::TruncIOp>(
-            loadOp.getLoc(), builder.getI32Type(), resStride);
-        newResult = builder.create<triton::LoadOp>(
-            loadOp.getLoc(), loadOp.getResult().getType(), newPtr, newMask,
-            newOther, loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
-            loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile(),
-            matStride, matStride, matStride);
-      } else {
-        newResult = builder.create<triton::LoadOp>(
-            loadOp.getLoc(), newPtr, newMask, newOther, loadOp.getCache(),
-            loadOp.getEvict(), loadOp.getIsVolatile());
-      }
-      op->getResult(0).replaceAllUsesWith(newResult);
-#else
       auto newResult = builder.create<triton::LoadOp>(
           loadOp.getLoc(), newPtr, newMask, newOther, loadOp.getCache(),
           loadOp.getEvict(), loadOp.getIsVolatile());
       op->getResult(0).replaceAllUsesWith(newResult);
-#endif
     } else if (auto storeOp = dyn_cast<triton::StoreOp>(op)) {
       builder.create<triton::StoreOp>(storeOp.getLoc(), newPtr,
                                       storeOp.getValue(), newMask,
@@ -599,3 +574,5 @@ public:
 std::unique_ptr<Pass> triton::createRewriteTensorPointerPass() {
   return std::make_unique<RewriteTensorPointerPass>();
 }
+
+#endif

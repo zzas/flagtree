@@ -11,11 +11,14 @@ using namespace mlir::triton;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::IluvatarMmaEncodingAttr;
+#ifdef FLAGTREE_SPEC_BackendMmaEncodingAttr
+using FLAGTREE_SPEC_BackendMmaEncodingAttr;
+#endif
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
+#ifndef FLAGTREE_SPEC_Conversion_TritonGPUToLLVM_TypeConverter_TritonGPUToLLVMTypeConverter
 TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &option,
     const DataLayoutAnalysis *analysis)
@@ -41,13 +44,12 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([&](mlir::Float8E5M2FNUZType type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 8);
   });
-#ifndef __ILUVATAR__
   // Internally store bfloat16 as int16
   addConversion([&](BFloat16Type type) -> std::optional<Type> {
     return IntegerType::get(type.getContext(), 16);
   });
-#endif
 }
+#endif
 
 Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
     triton::PointerType type) {
@@ -74,6 +76,7 @@ Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
   return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
 }
 
+#ifndef FLAGTREE_SPEC_Conversion_TritonGPUToLLVM_TypeConverter_getElementTypeForStruct
 Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
     TensorOrMemDesc type) {
   auto ctx = type.getContext();
@@ -82,15 +85,6 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   auto dotOpLayout = mlir::dyn_cast<DotOperandEncodingAttr>(layout);
   if (!dotOpLayout)
     return elemTy;
-  if (auto iluvatarmmaParent =
-          mlir::dyn_cast<IluvatarMmaEncodingAttr>(dotOpLayout.getParent())) {
-    if (iluvatarmmaParent.isVolta()) {
-      int bitwidth = elemTy.getIntOrFloatBitWidth();
-      if (bitwidth == 8)
-        return vec_ty(elemTy, 8);
-      return vec_ty(elemTy, 4);
-    }
-  }
   auto mmaParent =
       mlir::dyn_cast<NvidiaMmaEncodingAttr>(dotOpLayout.getParent());
   if (!mmaParent || mmaParent.isHopper())
@@ -99,6 +93,7 @@ Type TritonGPUToLLVMTypeConverter::getElementTypeForStruct(
   assert(bitwidth <= 32);
   return IntegerType::get(ctx, 32);
 }
+#endif
 
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
     RankedTensorType type) {

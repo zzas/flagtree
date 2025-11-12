@@ -1,3 +1,7 @@
+#include "flagtree_spec.h"
+
+#ifndef FLAGTREE_SPEC_Dialect_Triton_Transforms_Combine_cpp
+
 #include <memory>
 
 #include "mlir/IR/BuiltinAttributes.h"
@@ -134,9 +138,7 @@ public:
     rewriter.replaceOpWithNewOp<LoadOp>(
         op, loadOp.getPtr(), loadOp.getMask(), /*other=*/falseValue,
         loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
-        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile(),
-        loadOp.getInputStride(), loadOp.getInputStride(),
-        loadOp.getInputStride());
+        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
     return success();
   }
 };
@@ -239,7 +241,7 @@ public:
     patterns.add<CombineDotAddFRevPattern>(context);
     // %}
     patterns.add<CombineSelectMaskedLoadPattern>(context);
-    // patterns.add<CombineAddPtrPattern>(context);
+    patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastConstantPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
 
@@ -255,3 +257,5 @@ std::unique_ptr<mlir::Pass> createCombineOpsPass() {
 }
 
 } // namespace mlir::triton
+
+#endif

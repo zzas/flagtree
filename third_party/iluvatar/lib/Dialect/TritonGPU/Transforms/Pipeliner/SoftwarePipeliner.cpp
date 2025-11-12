@@ -1,3 +1,7 @@
+#include "flagtree_spec.h"
+
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_Pipeliner_SoftwarePipeliner_cpp
+
 #include "PipelineExpander.h"
 #include "PipeliningUtility.h"
 #include "Schedule.h"
@@ -12,6 +16,9 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#ifdef __NVIDIA__
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#endif
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 
@@ -88,9 +95,7 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
 
   if (failed(newForOp))
     return false;
-#ifndef __ILUVATAR__
   mlir::triton::asyncLaunchDots(newForOp.value());
-#endif
   return true;
 }
 
@@ -116,28 +121,16 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
         loops.push_back(forOp);
     });
 
-#ifdef __ILUVATAR__
-    ModuleOp mod = getOperation();
-    auto i32_ty = IntegerType::get(mod->getContext(), 32);
-#endif
-
-    if (loops.empty()) {
-#ifdef __ILUVATAR__
-      mod->setAttr("triton_gpu.dot.num-stages",
-                   IntegerAttr::get(i32_ty, llvm::APInt(32, 1)));
-#endif
+    if (loops.empty())
       return;
-    }
 
     llvm::SmallSetVector<scf::ForOp, 8> outerLoops;
     for (scf::ForOp forOp : loops) {
       auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
       bool pipelined = pipelineLoop(forOp, loopNumStages);
-#ifndef __ILUVATAR__
       if (pipelined && outerLoop && getNumStagesOrDefault(outerLoop) > 1)
         outerLoops.insert(outerLoop);
-#endif
     }
 
     // schedule the waits
@@ -150,15 +143,9 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     RewritePatternSet patterns(getOperation().getContext());
     arithDialect->getCanonicalizationPatterns(patterns);
     if (applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))
-            .failed()) {
-#ifdef __ILUVATAR__
-      mod->setAttr("triton_gpu.dot.num-stages",
-                   IntegerAttr::get(i32_ty, llvm::APInt(32, 1)));
-#endif
+            .failed())
       return signalPassFailure();
-    }
 
-#ifndef __ILUVATAR__
     // Try to pipeline the outer loop to overlap the prologue and epilogue of
     // the inner loop.
     for (scf::ForOp outerLoop : outerLoops)
@@ -175,10 +162,11 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     for (scf::ForOp forOp : loops) {
       mlir::triton::pipelineTMAStores(forOp);
     }
-#endif
   }
 };
 
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
+
+#endif

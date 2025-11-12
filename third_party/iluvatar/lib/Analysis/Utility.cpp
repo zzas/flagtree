@@ -13,6 +13,9 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#ifdef __NVIDIA__
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#endif
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
@@ -398,6 +401,7 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
+#ifndef FLAGTREE_SPEC_Analysis_Utility_maybeSharedAllocationOp
 bool maybeSharedAllocationOp(Operation *op) {
   // TODO(Keren): This function can be replaced by adding
   // MemoryEffectOpInterface. We can then use the MemoryEffectOpInterface to
@@ -405,10 +409,13 @@ bool maybeSharedAllocationOp(Operation *op) {
   auto *dialect = op->getDialect();
   return dialect &&
          (dialect->getTypeID() == TypeID::get<TritonGPUDialect>() ||
+          dialect->getTypeID() ==
+              TypeID::get<triton::nvidia_gpu::TritonNvidiaGPUDialect>() ||
           dialect->getTypeID() == TypeID::get<triton::TritonDialect>() ||
           dialect->getTypeID() == TypeID::get<arith::ArithDialect>() ||
           dialect->getTypeID() == TypeID::get<tensor::TensorDialect>());
 }
+#endif
 
 static bool supportMFMAGranularity(int m, int n, int k) {
   // these limitations are dtype dependent, in future we may relax them
@@ -529,6 +536,7 @@ bool supportWMMA(triton::DotOp op) {
   return true;
 }
 
+#ifndef FLAGTREE_SPEC_Analysis_Utility_supportMMA
 bool supportMMA(triton::DotOp op, int version) {
   // Refer to mma section for the data type supported by Volta and Hopper
   // Tensor Core in
@@ -557,31 +565,18 @@ bool supportMMA(triton::DotOp op, int version) {
       return false;
     }
   }
-#ifndef __ILUVATAR__
   if (aElemTy.isF32() && bElemTy.isF32()) {
     return op.getInputPrecision() == InputPrecision::TF32 && version >= 2;
   }
-#else
-  auto retElemTy =
-      op.getResult().getType().cast<RankedTensorType>().getElementType();
-  if (retElemTy.isF16()) {
-    return false;
-  }
-#endif
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
+#endif
 
+#ifndef FLAGTREE_SPEC_Analysis_Utility_supportMMA
 bool supportMMA(Value value, int version) {
   // Tell whether a DotOp support MMA by the operand type(either $a or $b).
   // We cannot get both the operand types(in TypeConverter), here we assume the
   // types of both the operands are identical here.
-#if defined(__ILUVATAR__)
-  assert((version == 1 || version == 2) &&
-         "Unexpected MMA layout version found");
-  auto elemTy = cast<TensorOrMemDesc>(value.getType()).getElementType();
-  return elemTy.isF16() || elemTy.isBF16() || elemTy.isF32() ||
-         elemTy.isInteger(8);
-#else
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
   auto elemTy = cast<TensorOrMemDesc>(value.getType()).getElementType();
@@ -592,8 +587,8 @@ bool supportMMA(Value value, int version) {
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
          (elemTy.isF32() && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);
-#endif
 }
+#endif
 
 bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   auto srcLayout = srcTy.getEncoding();
@@ -613,14 +608,8 @@ bool isMfmaToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
          (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
 }
 
+#ifndef FLAGTREE_SPEC_Analysis_Utility_isMmaToMmaShortcut
 static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
-#ifdef __ILUVATAR__
-  auto src = dyn_cast<IluvatarMmaEncodingAttr>(srcEncoding);
-  auto dst = dyn_cast<IluvatarMmaEncodingAttr>(dstEncoding);
-  if (!src || !dst)
-    return false;
-  return src.getVersionMinor() == 0 && dst.getVersionMinor() > 0;
-#else
   auto src = dyn_cast<NvidiaMmaEncodingAttr>(srcEncoding);
   auto dst = dyn_cast<NvidiaMmaEncodingAttr>(dstEncoding);
   if (!src || !dst)
@@ -629,8 +618,8 @@ static bool isMmaToMmaShortcut(Attribute srcEncoding, Attribute dstEncoding) {
   return src && dst && src.getVersionMajor() == 3 &&
          src.getWarpsPerCTA()[1] == 1 && dst.getVersionMajor() == 3 &&
          dst.getWarpsPerCTA()[1] == 1;
-#endif
 }
+#endif
 
 bool isMmaToMmaShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   return isMmaToMmaShortcut(srcTy.getEncoding(), dstTy.getEncoding());
@@ -651,21 +640,14 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   return ans;
 }
 
+#ifndef FLAGTREE_SPEC_Analysis_Utility_isMmaToDotShortcut
 bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
+  if (matchMmaV3AndDotOperandLayout(srcTy, dstTy))
+    return true;
   // dot_op<opIdx=0, parent=#mma> = #mma
   // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
   auto srcLayout = srcTy.getEncoding();
   auto dstLayout = dstTy.getEncoding();
-#ifdef __ILUVATAR__
-  auto mmaLayout = mlir::cast<IluvatarMmaEncodingAttr>(srcLayout);
-  auto dotOperandLayout = mlir::cast<DotOperandEncodingAttr>(dstLayout);
-  return mmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getParent() == mmaLayout &&
-         !srcTy.getElementType().isF32();
-#else
-  if (matchMmaV3AndDotOperandLayout(srcTy, dstTy))
-    return true;
   auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(srcLayout);
   auto dotOperandLayout = mlir::cast<DotOperandEncodingAttr>(dstLayout);
   return mmaLayout.getVersionMajor() == 2 &&
@@ -673,30 +655,8 @@ bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
          dotOperandLayout.getOpIdx() == 0 &&
          dotOperandLayout.getParent() == mmaLayout &&
          !srcTy.getElementType().isF32();
+}
 #endif
-}
-
-bool isMmaToDotSlowShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
-
-  auto srcLayout = srcTy.getEncoding();
-  auto dstLayout = dstTy.getEncoding();
-  if (!srcLayout.isa<triton::gpu::IluvatarMmaEncodingAttr>())
-    return false;
-  auto mmaLayout = srcLayout.cast<triton::gpu::IluvatarMmaEncodingAttr>();
-  if (!dstLayout.isa<triton::gpu::DotOperandEncodingAttr>())
-    return false;
-  auto dotOperandLayout = dstLayout.cast<triton::gpu::DotOperandEncodingAttr>();
-  auto dstParLayout = dotOperandLayout.getParent();
-  if (!dstParLayout.isa<triton::gpu::IluvatarMmaEncodingAttr>())
-    return false;
-  auto dstMmaLayout =
-      dstParLayout.dyn_cast<triton::gpu::IluvatarMmaEncodingAttr>();
-  return !isMmaToDotShortcut(srcTy, dstTy) &&
-         mmaLayout.getVersionMajor() == 1 &&
-         dstMmaLayout.getVersionMajor() == 1 &&
-         mmaLayout.getWarpsPerCTA()[0] == dstMmaLayout.getWarpsPerCTA()[0] &&
-         dotOperandLayout.getOpIdx() == 0 && !srcTy.getElementType().isF32();
-}
 
 namespace {
 
@@ -830,63 +790,10 @@ multiRootTopologicalSort(const SetVector<Operation *> &toSort) {
   return res;
 }
 
-#ifdef __ILUVATAR__
-void getBackwardSliceImplCorex(Operation *op,
-                               SetVector<Operation *> *backwardSlice,
-                               TransitiveFilter filter,
-                               bool omitBlockArguments) {
-  if (!op || op->hasTrait<OpTrait::IsIsolatedFromAbove>())
-    return;
-
-  // Evaluate whether we should keep this def.
-  // This is useful in particular to implement scoping; i.e. return the
-  // transitive backwardSlice in the current scope.
-  if (filter && !filter(op))
-    return;
-
-  for (const auto &en : llvm::enumerate(op->getOperands())) {
-    auto operand = en.value();
-    if (auto *definingOp = operand.getDefiningOp()) {
-      if (backwardSlice->count(definingOp) == 0)
-        getBackwardSliceImplCorex(definingOp, backwardSlice, filter,
-                                  omitBlockArguments);
-    } else if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
-      if (omitBlockArguments)
-        continue;
-
-      Block *block = blockArg.getOwner();
-      Operation *parentOp = block->getParentOp();
-      // TODO: determine whether we want to recurse backward into the other
-      // blocks of parentOp, which are not technically backward unless they flow
-      // into us. For now, just bail.
-      if (parentOp && backwardSlice->count(parentOp) == 0) {
-        // assert(parentOp->getNumRegions() == 1 &&
-        //        parentOp->getRegion(0).getBlocks().size() == 1);
-        getBackwardSliceImplCorex(parentOp, backwardSlice, filter,
-                                  omitBlockArguments);
-      }
-    } else {
-      llvm_unreachable("No definingOp and not a block argument.");
-    }
-  }
-
-  backwardSlice->insert(op);
-}
-
-void getBackwardSliceCorex(Operation *op, SetVector<Operation *> *backwardSlice,
-                           TransitiveFilter filter, bool omitBlockArguments) {
-  getBackwardSliceImplCorex(op, backwardSlice, filter, omitBlockArguments);
-
-  // Don't insert the top level operation, we just queried on it and don't
-  // want it in the results.
-  backwardSlice->remove(op);
-}
-#endif
-
+#ifndef FLAGTREE_SPEC_Utility_multiRootGetSlice_ARG
 SetVector<Operation *> multiRootGetSlice(Operation *op,
                                          TransitiveFilter backwardFilter,
-                                         TransitiveFilter forwardFilter,
-                                         bool omitBlockArguments) {
+                                         TransitiveFilter forwardFilter) {
   SetVector<Operation *> slice;
   slice.insert(op);
 
@@ -900,12 +807,7 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
     opt.filter = backwardFilter;
-#ifdef __ILUVATAR__
-    getBackwardSliceCorex(currentOp, &backwardSlice, opt.filter,
-                          opt.omitBlockArguments);
-#elif
     getBackwardSlice(currentOp, &backwardSlice, opt);
-#endif
     slice.insert(backwardSlice.begin(), backwardSlice.end());
 
     // Compute and insert the forwardSlice starting from currentOp.
@@ -916,6 +818,7 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
   }
   return multiRootTopologicalSort(slice);
 }
+#endif
 
 namespace {
 // Copied from TestDeadCodeAnalysis.cpp, because some dead code analysis

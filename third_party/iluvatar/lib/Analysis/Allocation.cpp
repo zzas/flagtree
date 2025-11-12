@@ -23,7 +23,9 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getUniqueContigPerThread;
-using ::mlir::triton::gpu::IluvatarMmaEncodingAttr;
+#ifdef FLAGTREE_SPEC_BackendMmaEncodingAttr
+using FLAGTREE_SPEC_BackendMmaEncodingAttr;
+#endif
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -38,9 +40,12 @@ namespace triton {
 // Bitwidth of pointers
 constexpr int kPtrBitWidth = 64;
 
+#ifdef FLAGTREE_SPEC_Analysis_Allocation_getCvtOrder
+std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
+#else
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
+#endif
 getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
-  // REBASE TODO: add IluvatarMmaEncodingAttr case?
   auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout);
   auto srcDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(srcLayout);
   auto dstMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout);
@@ -59,6 +64,7 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
   return {inOrd, outOrd};
 }
 
+#ifndef FLAGTREE_SPEC_Analysis_Allocation_getRepShapeForCvtLayout
 SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   auto srcTy = op.getSrc().getType();
   auto dstTy = op.getType();
@@ -86,29 +92,6 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
       }
     }
   }
-  if (auto srcMmaLayout = mlir::dyn_cast<IluvatarMmaEncodingAttr>(srcLayout)) {
-    if (mlir::isa<DotOperandEncodingAttr>(dstLayout)) {
-      if (isMmaToDotShortcut(srcTy, dstTy)) {
-        return {};
-      } else if (isMmaToDotSlowShortcut(srcTy, dstTy)) {
-        return getShapePerCTATile(srcMmaLayout);
-      }
-    } else if (auto dstMmaLayout =
-                   mlir::dyn_cast<IluvatarMmaEncodingAttr>(dstLayout)) {
-      if (isMmaToMmaShortcut(srcTy, dstTy)) {
-        return {};
-      }
-    }
-  }
-
-  if (auto srcSliceLayout = srcLayout.dyn_cast<SliceEncodingAttr>()) {
-    if (auto dstSliceLayout = dstLayout.dyn_cast<SliceEncodingAttr>()) {
-      if (srcSliceLayout.getParent().isa<IluvatarMmaEncodingAttr>() &&
-          dstSliceLayout.getParent().isa<IluvatarMmaEncodingAttr>()) {
-        return {};
-      }
-    }
-  }
 
   assert(srcLayout && dstLayout && "Unexpected layout in getRepShape()");
 
@@ -126,7 +109,9 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   }
   return repShape;
 }
+#endif
 
+#ifndef FLAGTREE_SPEC_Analysis_Allocation_getScratchConfigForCvtLayout
 SmallVector<unsigned>
 getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
                              unsigned &outVec) {
@@ -140,8 +125,6 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
   Attribute dstLayout = dstTy.getEncoding();
 
   assert(!isMfmaToDotShortcut(srcTy, dstTy));
-  if (isMmaToDotSlowShortcut(srcTy, dstTy))
-    return repShape;
 
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
   unsigned srcContigPerThread =
@@ -177,13 +160,10 @@ getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
     paddedDim = dstBlockedLayout.getOrder()[0];
   }
   unsigned pad = std::max(inVec, outVec);
-  if (mlir::dyn_cast<IluvatarMmaEncodingAttr>(srcLayout) &&
-      mlir::isa<BlockedEncodingAttr>(dstLayout)) {
-    pad = 16;
-  }
   repShape[paddedDim] += pad;
   return repShape;
 }
+#endif
 
 // TODO: extend beyond scalars
 SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
@@ -313,10 +293,11 @@ private:
       unsigned inVec = 0;
       unsigned outVec = 0;
       auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
-      unsigned elems = 0;
-      if (!smemShape.empty())
-        elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                std::multiplies{});
+      unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
+                                       std::multiplies{});
+#ifdef FLAGTREE_SPEC_Analysis_Allocation_AllocationAnalysis_getScratchValueSize
+      elems = getScratchValueSizeElems(smemShape);
+#endif
       auto bytes =
           isa<triton::PointerType>(srcTy.getElementType())
               ? elems * kPtrBitWidth / 8
@@ -662,23 +643,9 @@ private:
     }
   }
 
-  void dump() const {
-    llvm::outs() << "DUMP: "
-                 << "\n";
-    for (auto bufferIter : bufferRange) {
-      llvm::outs() << "ID= " << bufferIter.first->id << "\n";
-      if (bufferIter.first->kind == BufferT::BufferKind::Explicit)
-        llvm::outs() << "     Kind= Explict\n";
-      else if (bufferIter.first->kind == BufferT::BufferKind::Scratch)
-        llvm::outs() << "     Kind= Scratch\n";
-      else if (bufferIter.first->kind == BufferT::BufferKind::Virtual)
-        llvm::outs() << "     Kind= Virtual\n";
-      llvm::outs() << "     Size= " << bufferIter.first->size << "\n";
-      llvm::outs() << "     Offs= " << bufferIter.first->offset << "\n";
-      llvm::outs() << "     Interval= [" << bufferIter.second.start() << ", "
-                   << bufferIter.second.end() << ")\n";
-    }
-  }
+#ifdef FLAGTREE_SPEC_Analysis_Allocation_AllocationAnalysis_dump
+  void dump() const { Allocation::dump(bufferRange); }
+#endif
 
 private:
   Operation *operation;
